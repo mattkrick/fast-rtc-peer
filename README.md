@@ -13,8 +13,7 @@ Most libraries out there were written years ago before WebRTC hit v1.0.
 As a result, they can slow and a little bloated.
 The goal of this library is to be fast, small, and easy to understand.
 
-
-## FAQ 
+## FAQ
 
 ### Can I connect more than 2 peers?
 
@@ -30,8 +29,9 @@ Yes! Just use the underlying RTCConnection: `peer.peerConnection.createDataChann
 
 ### Does it support audio/video?
 
-Not yet. Feel free to PR or open an issue to propose an API! 
-For now, it just opens up a single data channel.
+Yes, but you have to use the low-level API.
+Now that WebRTC Stage 3 is finalized & pretty great, I'm open to writing a wrapper around it.
+Open an issue to discuss what that API should look like.
 
 ## Usage
 
@@ -82,9 +82,9 @@ Options: A superset of `RTCConfiguration`
 - `isOfferer`: true if this client will be sending an offer, falsy if the client will be receiving the offer.
 - `id`: An ID to assign to the peer, defaults to a v4 uuid
 - `wrtc`: pass in [node-webrtc](https://github.com/js-platform/node-webrtc) if using server side
-  
+
 Static Methods
-- `defaultICEServers`: a list of default STUN servers. 
+- `defaultICEServers`: a list of default STUN servers.
 In production, you'll want to add a list of TURN servers to this if peers are behind symmetrical NATs.
 An instantiation may look like this: `new FastRTCPeer({iceServers: [...FastRTCPeer.defaultIceServers, myTURNServer]})`
 
@@ -98,9 +98,9 @@ Methods
 - `peer.on(DATA_OPEN, (peer) => {})`: fired when a peer connects
 - `peer.on(DATA_CLOSE, (peer) => {})`: fired when a peer disconnects
 - `peer.on(DATA, (data, peer) => {})`: fired when a peer sends data
-- `peer.on(SIGNAL, (signal, peer) => {})`: fired when a peer creates an offer, ICE candidate, or answer. 
+- `peer.on(SIGNAL, (signal, peer) => {})`: fired when a peer creates an offer, ICE candidate, or answer.
 Don't worry about what that means. Just forward it to the remote client & have them call `dispatch(signal)`.
- 
+
 ## License
 
 MIT
