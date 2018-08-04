@@ -2,15 +2,28 @@ import EventEmitter from 'eventemitter3'
 import uuid from 'uuid/v4'
 
 // Payloads
-export const OFFER = 'offer'
-export const ANSWER = 'answer'
-export const CANDIDATE = 'candidate'
+export const OFFER: 'offer' = 'offer'
+export const ANSWER: 'answer' = 'answer'
+export const CANDIDATE: 'candidate' = 'candidate'
 
 // Events
-export const SIGNAL = 'signal'
-export const DATA = 'data'
-export const DATA_OPEN = 'dataOpen'
-export const DATA_CLOSE = 'dataClose'
+export const SIGNAL: 'signal' = 'signal'
+export const DATA: 'data' = 'data'
+export const DATA_OPEN: 'dataOpen' = 'dataOpen'
+export const DATA_CLOSE: 'dataClose' = 'dataClose'
+
+// hacks to get around the errors in lib.dom.d
+declare global {
+  interface Window {
+    RTCIceCandidate: typeof RTCIceCandidate
+    RTCPeerConnection: typeof RTCPeerConnection
+    RTCSessionDescription: typeof RTCSessionDescription
+  }
+
+  interface RTCDataChannel {
+    send (data: string | Blob | ArrayBuffer | ArrayBufferView): void
+  }
+}
 
 export interface PeerConfig extends RTCConfiguration {
   id?: string
@@ -20,12 +33,29 @@ export interface PeerConfig extends RTCConfiguration {
 
 export interface WRTC {
   RTCIceCandidate: typeof RTCIceCandidate
-  RTCPeerConnection: RTCPeerConnectionStatic
+  RTCPeerConnection: typeof RTCPeerConnection
   RTCSessionDescription: typeof RTCSessionDescription
 }
 
+export interface OfferPayload {
+  type: 'offer'
+  sdp: string
+}
+
+export interface CandidatePayload {
+  type: 'candidate'
+  candidate: RTCIceCandidateInit
+}
+
+export interface AnswerPayload {
+  type: 'answer'
+  sdp: string
+}
+
+export type DispatchPayload = OfferPayload | CandidatePayload | AnswerPayload
+
 class FastRTCPeer extends EventEmitter {
-  static defaultICEServers = [
+  static defaultICEServers: Array<RTCIceServer> = [
     {
       urls: 'stun:stun.l.google.com:19302'
     },
@@ -37,32 +67,24 @@ class FastRTCPeer extends EventEmitter {
     iceServers: FastRTCPeer.defaultICEServers
   }
 
-  dataChannel: any
+  dataChannel?: RTCDataChannel
   id: string
   isOfferer: boolean
   peerConnection!: RTCPeerConnection
-  wrtc: WRTC
+  wrtc: WRTC | Window
 
-  constructor(userConfig: PeerConfig) {
+  constructor (userConfig: PeerConfig) {
     super()
-    const {
-      id = uuid(),
-      isOfferer = false,
-      wrtc = window,
-      ...rest
-    }: PeerConfig =
-      userConfig || {}
+    const { id = uuid(), isOfferer = false, wrtc = window, ...rest }: PeerConfig = userConfig || {}
     this.id = id
     this.isOfferer = isOfferer
-    this.wrtc = wrtc as any
+    this.wrtc = wrtc
     const peerConnectionConfig = { ...FastRTCPeer.defaultConfig, ...rest }
     this.setup(peerConnectionConfig)
   }
 
-  private setup(config) {
-    const peerConnection = (this.peerConnection = new this.wrtc.RTCPeerConnection(
-      config
-    ))
+  private setup (config: RTCConfiguration) {
+    const peerConnection = (this.peerConnection = new this.wrtc.RTCPeerConnection(config))
     peerConnection.onicecandidate = this.onIceCandidate
     peerConnection.oniceconnectionstatechange = this.onIceConnectionStateChange
     if (this.isOfferer) {
@@ -70,20 +92,20 @@ class FastRTCPeer extends EventEmitter {
       this.setChannelEvents(channel)
       peerConnection.onnegotiationneeded = this.onNegotiationNeeded
     } else {
-      peerConnection.ondatachannel = e => {
+      peerConnection.ondatachannel = (e) => {
         this.setChannelEvents(e.channel)
       }
     }
   }
 
-  private setChannelEvents = channel => {
+  private setChannelEvents = (channel: RTCDataChannel) => {
     channel.onmessage = this.onDataChannelMessage
     channel.onopen = this.onDataChannelOpen
     channel.onclose = this.onDataChannelClose
     this.dataChannel = channel
   }
 
-  private onDataChannelMessage = event => {
+  private onDataChannelMessage = (event: MessageEvent) => {
     this.emit(DATA, event.data, this)
   }
 
@@ -126,46 +148,54 @@ class FastRTCPeer extends EventEmitter {
     this.peerConnection.setLocalDescription(offer)
   }
 
-  private handleAnswer(sdpStr) {
-    const sdp = new this.wrtc.RTCSessionDescription(sdpStr) as any
-    this.peerConnection.setRemoteDescription(sdp)
+  private handleAnswer (initSDP: RTCSessionDescriptionInit) {
+    const desc = new this.wrtc.RTCSessionDescription(initSDP) as RTCSessionDescriptionInit
+    this.peerConnection.setRemoteDescription(desc)
   }
 
-  private handleCandidate(candidateObj) {
+  private handleCandidate (candidateObj: RTCIceCandidateInit) {
     const candidate = new this.wrtc.RTCIceCandidate(candidateObj)
     this.peerConnection.addIceCandidate(candidate)
   }
 
-  private handleOffer = async sdpMessage => {
-    const sdp = new this.wrtc.RTCSessionDescription(sdpMessage) as any
+  private handleOffer = async (nitSDP: RTCSessionDescriptionInit) => {
+    // typescript defs for RTCSessionDescription should return RTCSessionDescription, not the init
+    const sdp = new this.wrtc.RTCSessionDescription(nitSDP) as RTCSessionDescriptionInit
     await this.peerConnection.setRemoteDescription(sdp)
     const answer = await this.peerConnection.createAnswer()
     this.emit(SIGNAL, answer, this)
     this.peerConnection.setLocalDescription(answer)
   }
 
-  close() {
+  async addMedia (mediaConstraints: MediaStreamConstraints) {
+    const { navigator } = this.wrtc as any
+    if (!navigator) return
+    const stream = await window.navigator.mediaDevices.getUserMedia(mediaConstraints)
+    const tracks = stream.getTracks()
+    tracks.forEach((track) => this.peerConnection.addTrack(track, stream))
+  }
+
+  close () {
     this.peerConnection.close()
     this.peerConnection.onicecandidate = null
     this.peerConnection.oniceconnectionstatechange = null
     this.peerConnection.onnegotiationneeded = null
   }
 
-  send = data => {
-    this.dataChannel.send(data)
+  send = (data: string | Blob | ArrayBuffer | ArrayBufferView) => {
+    this.dataChannel!.send(data)
   }
 
-  dispatch(payload) {
-    const { candidate, sdp, type } = payload
-    switch (type) {
+  dispatch (payload: DispatchPayload) {
+    switch (payload.type) {
       case OFFER:
-        this.handleOffer({ type, sdp })
+        this.handleOffer(payload)
         break
       case CANDIDATE:
-        this.handleCandidate(candidate)
+        this.handleCandidate(payload.candidate)
         break
       case ANSWER:
-        this.handleAnswer({ type, sdp })
+        this.handleAnswer(payload)
     }
   }
 }

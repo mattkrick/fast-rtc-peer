@@ -1,4 +1,5 @@
 const path = require('path')
+const CleanWebpackPlugin = require('clean-webpack-plugin')
 
 module.exports = {
   mode: 'development',
@@ -15,7 +16,7 @@ module.exports = {
   resolve: {
     extensions: ['.ts']
   },
-  externals: ['eventemitter3', 'uuid/v4'],
+  externals: ['eventemitter3', 'tslib', 'uuid/v4'],
   module: {
     rules: [
       {
@@ -23,5 +24,8 @@ module.exports = {
         loader: 'awesome-typescript-loader'
       }
     ]
-  }
+  },
+  plugins: [
+    new CleanWebpackPlugin([path.join(__dirname, 'dist/**/*')])
+  ]
 }
