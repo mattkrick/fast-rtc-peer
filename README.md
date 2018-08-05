@@ -98,6 +98,7 @@ Methods
 - `peer.on(DATA_OPEN, (peer) => {})`: fired when a peer connects
 - `peer.on(DATA_CLOSE, (peer) => {})`: fired when a peer disconnects
 - `peer.on(DATA, (data, peer) => {})`: fired when a peer sends data
+- `peer.on(ERROR, (error, peer) => {})`: fired when an error occurs in the signaling process
 - `peer.on(SIGNAL, (signal, peer) => {})`: fired when a peer creates an offer, ICE candidate, or answer.
 Don't worry about what that means. Just forward it to the remote client & have them call `dispatch(signal)`.
 

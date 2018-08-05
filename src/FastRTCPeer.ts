@@ -11,6 +11,7 @@ export const SIGNAL: 'signal' = 'signal'
 export const DATA: 'data' = 'data'
 export const DATA_OPEN: 'dataOpen' = 'dataOpen'
 export const DATA_CLOSE: 'dataClose' = 'dataClose'
+export const ERROR: 'error' = 'error'
 
 // hacks to get around the errors in lib.dom.d
 declare global {
@@ -21,9 +22,11 @@ declare global {
   }
 
   interface RTCDataChannel {
-    send (data: string | Blob | ArrayBuffer | ArrayBufferView): void
+    send (data: DataPayload): void
   }
 }
+
+export type DataPayload = string | Blob | ArrayBuffer | ArrayBufferView
 
 export interface PeerConfig extends RTCConfiguration {
   id?: string
@@ -145,17 +148,17 @@ class FastRTCPeer extends EventEmitter {
   private onNegotiationNeeded = async () => {
     const offer = await this.peerConnection.createOffer()
     this.emit(SIGNAL, offer, this)
-    this.peerConnection.setLocalDescription(offer)
+    this.peerConnection.setLocalDescription(offer).catch((e) => this.emit(ERROR, e, this))
   }
 
   private handleAnswer (initSDP: RTCSessionDescriptionInit) {
     const desc = new this.wrtc.RTCSessionDescription(initSDP) as RTCSessionDescriptionInit
-    this.peerConnection.setRemoteDescription(desc)
+    this.peerConnection.setRemoteDescription(desc).catch((e) => this.emit(ERROR, e, this))
   }
 
   private handleCandidate (candidateObj: RTCIceCandidateInit) {
     const candidate = new this.wrtc.RTCIceCandidate(candidateObj)
-    this.peerConnection.addIceCandidate(candidate)
+    this.peerConnection.addIceCandidate(candidate).catch((e) => this.emit(ERROR, e, this))
   }
 
   private handleOffer = async (nitSDP: RTCSessionDescriptionInit) => {
@@ -164,7 +167,7 @@ class FastRTCPeer extends EventEmitter {
     await this.peerConnection.setRemoteDescription(sdp)
     const answer = await this.peerConnection.createAnswer()
     this.emit(SIGNAL, answer, this)
-    this.peerConnection.setLocalDescription(answer)
+    await this.peerConnection.setLocalDescription(answer)
   }
 
   async addMedia (mediaConstraints: MediaStreamConstraints) {
@@ -189,7 +192,7 @@ class FastRTCPeer extends EventEmitter {
   dispatch (payload: DispatchPayload) {
     switch (payload.type) {
       case OFFER:
-        this.handleOffer(payload)
+        this.handleOffer(payload).catch((e) => this.emit(ERROR, e, this))
         break
       case CANDIDATE:
         this.handleCandidate(payload.candidate)
