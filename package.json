@@ -1,6 +1,6 @@
 {
   "name": "@mattkrick/fast-rtc-peer",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "a small RTC client for connecting 2 peers",
   "keywords": [
     "WebRTC",
@@ -30,6 +30,7 @@
     "docs:publish": "gh-pages -m \"[ci skip] Updates\" -d docs",
     "lint": "yarn prettier && yarn standard",
     "precommit": "lint-staged",
+    "prepublish": "yarn build",
     "prettier": "prettier --write --loglevel warn ./**/*.ts",
     "standard": "tslint -c tslint.json --project tsconfig.json --fix ./**/*.ts",
     "watch": "webpack --config webpack.config.js -w"
