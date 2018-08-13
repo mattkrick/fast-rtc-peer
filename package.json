@@ -1,6 +1,6 @@
 {
   "name": "@mattkrick/fast-rtc-peer",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "a small RTC client for connecting 2 peers",
   "keywords": [
     "WebRTC",
