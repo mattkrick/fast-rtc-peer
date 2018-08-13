@@ -123,7 +123,6 @@ class FastRTCPeer extends EventEmitter {
   private onIceCandidate = (event: RTCPeerConnectionIceEvent) => {
     const { candidate } = event
     // if candidate is null, then the trickle is complete
-    if (!candidate) return
     this.emit(
       SIGNAL,
       {
@@ -185,7 +184,7 @@ class FastRTCPeer extends EventEmitter {
     this.peerConnection.onnegotiationneeded = null
   }
 
-  send = (data: string | Blob | ArrayBuffer | ArrayBufferView) => {
+  send = (data: DataPayload) => {
     this.dataChannel!.send(data)
   }
 

@@ -29,6 +29,7 @@
     "docs:build": "typedoc --out docs --target es6 --mode file --ignoreCompilerErrors --hideGenerator src",
     "docs:publish": "gh-pages -m \"[ci skip] Updates\" -d docs",
     "lint": "yarn prettier && yarn standard",
+    "precommit": "lint-staged",
     "prettier": "prettier --write --loglevel warn ./**/*.ts",
     "standard": "tslint -c tslint.json --project tsconfig.json --fix ./**/*.ts",
     "watch": "webpack --config webpack.config.js -w"
@@ -36,6 +37,7 @@
   "lint-staged": {
     "src/**/*.ts": [
       "prettier --write",
+      "tslint --fix",
       "git add"
     ]
   },
