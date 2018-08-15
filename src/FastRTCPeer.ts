@@ -1,5 +1,5 @@
 import EventEmitter from 'eventemitter3'
-import uuid from 'uuid/v4'
+import shortid from 'shortid'
 
 // Payloads
 export const OFFER: 'offer' = 'offer'
@@ -78,7 +78,8 @@ class FastRTCPeer extends EventEmitter {
 
   constructor (userConfig: PeerConfig) {
     super()
-    const { id = uuid(), isOfferer = false, wrtc = window, ...rest }: PeerConfig = userConfig || {}
+    const { id = shortid.generate(), isOfferer = false, wrtc = window, ...rest }: PeerConfig =
+      userConfig || {}
     this.id = id
     this.isOfferer = isOfferer
     this.wrtc = wrtc

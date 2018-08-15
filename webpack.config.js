@@ -1,5 +1,6 @@
 const path = require('path')
 const CleanWebpackPlugin = require('clean-webpack-plugin')
+const nodeExternals = require('webpack-node-externals');
 
 module.exports = {
   mode: 'development',
@@ -10,13 +11,13 @@ module.exports = {
   output: {
     path: path.join(__dirname, './dist'),
     filename: '[name].js',
-    libraryTarget: 'commonjs2',
+    libraryTarget: 'commonjs',
     library: 'FastRTCPeer'
   },
   resolve: {
     extensions: ['.ts']
   },
-  externals: ['eventemitter3', 'tslib', 'uuid/v4'],
+  externals: [nodeExternals()],
   module: {
     rules: [
       {
