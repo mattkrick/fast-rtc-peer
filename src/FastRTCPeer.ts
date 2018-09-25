@@ -1,17 +1,6 @@
 import EventEmitter from 'eventemitter3'
 import shortid from 'shortid'
-
-// Payloads
-export const OFFER: 'offer' = 'offer'
-export const ANSWER: 'answer' = 'answer'
-export const CANDIDATE: 'candidate' = 'candidate'
-
-// Events
-export const SIGNAL: 'signal' = 'signal'
-export const DATA: 'data' = 'data'
-export const DATA_OPEN: 'dataOpen' = 'dataOpen'
-export const DATA_CLOSE: 'dataClose' = 'dataClose'
-export const ERROR: 'error' = 'error'
+import StrictEventEmitter from 'strict-event-emitter-types'
 
 // hacks to get around the errors in lib.dom.d
 declare global {
@@ -26,11 +15,25 @@ declare global {
   }
 }
 
+export type PayloadToServer = CandidatePayload | RTCSessionDescriptionInit
+
+export interface FastRTCPeerEvents {
+  signal: (payload: PayloadToServer, peer: FastRTCPeer) => void
+  data: (data: DataPayload, peer: FastRTCPeer) => void
+  dataOpen: (peer: FastRTCPeer) => void
+  dataClose: (peer: FastRTCPeer) => void
+  error: (error: Error, peer: FastRTCPeer) => void
+  onTrack: (event: RTCTrackEvent, peer: FastRTCPeer) => void
+  stream: (stream: MediaStream | null, peer: FastRTCPeer) => void
+}
+
 export type DataPayload = string | Blob | ArrayBuffer | ArrayBufferView
 
 export interface PeerConfig extends RTCConfiguration {
   id?: string
   isOfferer?: boolean
+  audio?: RTCRtpTransceiverInit
+  video?: RTCRtpTransceiverInit
   wrtc?: WRTC
 }
 
@@ -47,7 +50,7 @@ export interface OfferPayload {
 
 export interface CandidatePayload {
   type: 'candidate'
-  candidate: RTCIceCandidateInit
+  candidate: RTCIceCandidateInit | null
 }
 
 export interface AnswerPayload {
@@ -55,9 +58,21 @@ export interface AnswerPayload {
   sdp: string
 }
 
-export type DispatchPayload = OfferPayload | CandidatePayload | AnswerPayload
+export type PayloadFromServer = OfferPayload | CandidatePayload | AnswerPayload
 
-class FastRTCPeer extends EventEmitter {
+export type FastRTCPeerEmitter = {new (): StrictEventEmitter<EventEmitter, FastRTCPeerEvents>}
+
+export type TrackKind = 'audio' | 'video'
+// Try again later when all of these exist in lib
+// export type ICEError = TypeError | InvalidStateError | OperationError
+
+const getTrack = (streams: Array<MediaStream> | undefined, kind: TrackKind) => {
+  if (!streams || !streams[0]) return
+  const method = kind === 'audio' ? 'getAudioTracks' : 'getVideoTracks'
+  return streams[0][method]()[0]
+}
+
+class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   static defaultICEServers: Array<RTCIceServer> = [
     {
       urls: 'stun:stun.l.google.com:19302'
@@ -74,27 +89,87 @@ class FastRTCPeer extends EventEmitter {
   id: string
   isOfferer: boolean
   peerConnection!: RTCPeerConnection
+  audioConfig?: RTCRtpTransceiverInit
+  videoConfig?: RTCRtpTransceiverInit
   wrtc: WRTC | Window
+  stream?: MediaStream
 
-  constructor (userConfig: PeerConfig) {
+  constructor (userConfig: PeerConfig = {}) {
     super()
-    const { id = shortid.generate(), isOfferer = false, wrtc = window, ...rest }: PeerConfig =
-      userConfig || {}
+    const {
+      audio,
+      id = shortid.generate(),
+      isOfferer = false,
+      video,
+      wrtc = window,
+      ...rest
+    } = userConfig
     this.id = id
     this.isOfferer = isOfferer
     this.wrtc = wrtc
+    this.audioConfig = audio
     const peerConnectionConfig = { ...FastRTCPeer.defaultConfig, ...rest }
-    this.setup(peerConnectionConfig)
+    this.setupData(peerConnectionConfig)
+    this.peerConnection.ontrack = this.onTrack
+    this.setupVideo(video)
+    this.setupAudio(audio)
   }
 
-  private setup (config: RTCConfiguration) {
+  setupVideo = (videoConfig?: RTCRtpTransceiverInit) => {
+    this.videoConfig = videoConfig
+    this.setupTransceiver(videoConfig, 'video')
+  }
+
+  setupAudio = (audioConfig?: RTCRtpTransceiverInit) => {
+    this.audioConfig = audioConfig
+    this.setupTransceiver(audioConfig, 'audio')
+  }
+
+  onTrack = async (e: RTCTrackEvent) => {
+    if (this.isOfferer) {
+      if (this.stream) {
+        this.stream.addTrack(e.track)
+      } else {
+        // `replaceTrack` doesn't link to a stream & setStream isn't available yet, so we manage our own
+        this.stream = new MediaStream([e.track])
+      }
+    } else {
+      const {
+        streams,
+        track: { kind }
+      } = e
+      this.stream = streams[0] || null
+      await this.replyWithMedia(e.transceiver, kind as TrackKind)
+    }
+    this.emit('stream', this.stream, this)
+    this.emit('onTrack', e, this)
+  }
+
+  private replyWithMedia = async (transceiver: RTCRtpTransceiver, kind: TrackKind) => {
+    const config = kind === 'audio' ? this.audioConfig : this.videoConfig
+    const track = getTrack(config && config.streams, kind as TrackKind)
+    if (track) {
+      await transceiver.sender.replaceTrack(track)
+      transceiver.direction = 'sendrecv'
+    }
+  }
+
+  private setupTransceiver = (config: RTCRtpTransceiverInit | undefined, kind: TrackKind) => {
+    if (!config) return
+    if (this.isOfferer) {
+      const trackOrKind = getTrack(config.streams, kind) || kind
+      this.peerConnection.addTransceiver(trackOrKind, config)
+    }
+  }
+
+  private setupData (config: RTCConfiguration) {
     const peerConnection = (this.peerConnection = new this.wrtc.RTCPeerConnection(config))
     peerConnection.onicecandidate = this.onIceCandidate
     peerConnection.oniceconnectionstatechange = this.onIceConnectionStateChange
+    peerConnection.onnegotiationneeded = this.onNegotiationNeeded
     if (this.isOfferer) {
       const channel = this.peerConnection.createDataChannel('fastRTC')
       this.setChannelEvents(channel)
-      peerConnection.onnegotiationneeded = this.onNegotiationNeeded
     } else {
       peerConnection.ondatachannel = (e) => {
         this.setChannelEvents(e.channel)
@@ -110,25 +185,25 @@ class FastRTCPeer extends EventEmitter {
   }
 
   private onDataChannelMessage = (event: MessageEvent) => {
-    this.emit(DATA, event.data, this)
+    this.emit('data', event.data, this)
   }
 
   private onDataChannelClose = () => {
-    this.emit(DATA_CLOSE, this)
+    this.emit('dataClose', this)
   }
 
   private onDataChannelOpen = () => {
-    this.emit(DATA_OPEN, this)
+    this.emit('dataOpen', this)
   }
 
   private onIceCandidate = (event: RTCPeerConnectionIceEvent) => {
-    const { candidate } = event
     // if candidate is null, then the trickle is complete
     this.emit(
-      SIGNAL,
+      'signal',
       {
-        type: CANDIDATE,
-        candidate
+        type: 'candidate',
+        // hack for strict-event-emitter-types
+        candidate: event.candidate as any
       },
       this
     )
@@ -137,9 +212,9 @@ class FastRTCPeer extends EventEmitter {
   private onIceConnectionStateChange = () => {
     const { iceConnectionState } = this.peerConnection
     switch (iceConnectionState) {
+      // Note: does NOT close on 'disconnected' because that is only temporary
       case 'closed':
       case 'failed':
-      case 'disconnected':
         this.close()
         break
     }
@@ -147,26 +222,27 @@ class FastRTCPeer extends EventEmitter {
 
   private onNegotiationNeeded = async () => {
     const offer = await this.peerConnection.createOffer()
-    this.emit(SIGNAL, offer, this)
-    this.peerConnection.setLocalDescription(offer).catch((e) => this.emit(ERROR, e, this))
+    this.emit('signal', offer, this)
+    this.peerConnection.setLocalDescription(offer).catch((e: Error) => this.emit('error', e, this))
   }
 
   private handleAnswer (initSDP: RTCSessionDescriptionInit) {
     const desc = new this.wrtc.RTCSessionDescription(initSDP) as RTCSessionDescriptionInit
-    this.peerConnection.setRemoteDescription(desc).catch((e) => this.emit(ERROR, e, this))
+    this.peerConnection.setRemoteDescription(desc).catch((e: Error) => this.emit('error', e, this))
   }
 
-  private handleCandidate (candidateObj: RTCIceCandidateInit) {
+  private handleCandidate (candidateObj: RTCIceCandidateInit | null) {
+    if (!candidateObj) return
     const candidate = new this.wrtc.RTCIceCandidate(candidateObj)
-    this.peerConnection.addIceCandidate(candidate).catch((e) => this.emit(ERROR, e, this))
+    this.peerConnection.addIceCandidate(candidate).catch((e: Error) => this.emit('error', e, this))
   }
 
-  private handleOffer = async (nitSDP: RTCSessionDescriptionInit) => {
+  private handleOffer = async (initSDP: RTCSessionDescriptionInit) => {
     // typescript defs for RTCSessionDescription should return RTCSessionDescription, not the init
-    const sdp = new this.wrtc.RTCSessionDescription(nitSDP) as RTCSessionDescriptionInit
+    const sdp = new this.wrtc.RTCSessionDescription(initSDP) as RTCSessionDescriptionInit
     await this.peerConnection.setRemoteDescription(sdp)
     const answer = await this.peerConnection.createAnswer()
-    this.emit(SIGNAL, answer, this)
+    this.emit('signal', answer, this)
     await this.peerConnection.setLocalDescription(answer)
   }
 
@@ -183,21 +259,23 @@ class FastRTCPeer extends EventEmitter {
     this.peerConnection.onicecandidate = null
     this.peerConnection.oniceconnectionstatechange = null
     this.peerConnection.onnegotiationneeded = null
+    this.peerConnection.ondatachannel = null
+    this.peerConnection.ontrack = null
   }
 
   send = (data: DataPayload) => {
     this.dataChannel!.send(data)
   }
 
-  dispatch (payload: DispatchPayload) {
+  dispatch (payload: PayloadFromServer) {
     switch (payload.type) {
-      case OFFER:
-        this.handleOffer(payload).catch((e) => this.emit(ERROR, e, this))
+      case 'offer':
+        this.handleOffer(payload).catch((e: Error) => this.emit('error', e, this))
         break
-      case CANDIDATE:
+      case 'candidate':
         this.handleCandidate(payload.candidate)
         break
-      case ANSWER:
+      case 'answer':
         this.handleAnswer(payload)
     }
   }

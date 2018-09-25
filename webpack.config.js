@@ -11,7 +11,7 @@ module.exports = {
   output: {
     path: path.join(__dirname, './dist'),
     filename: '[name].js',
-    libraryTarget: 'commonjs',
+    libraryTarget: 'commonjs2',
     library: 'FastRTCPeer'
   },
   resolve: {
