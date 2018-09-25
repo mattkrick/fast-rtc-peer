@@ -85,6 +85,10 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     iceServers: FastRTCPeer.defaultICEServers
   }
 
+  static generateID = () => {
+    return shortid.generate()
+  }
+
   dataChannel?: RTCDataChannel
   id: string
   isOfferer: boolean
@@ -98,7 +102,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     super()
     const {
       audio,
-      id = shortid.generate(),
+      id = FastRTCPeer.generateID(),
       isOfferer = false,
       video,
       wrtc = window,
