@@ -12,6 +12,7 @@ WebRTC is great, but navigating the handshake includes a lot of boilerplate.
 Most libraries out there were written years ago before WebRTC hit v1.0.
 As a result, they can slow and a little bloated.
 The goal of this library is to be fast, small, and easy to understand.
+It's built using the lowest level API, so there are no bug mitigation patterns required.
 
 ## FAQ
 
@@ -29,8 +30,7 @@ Yes! Just use the underlying RTCConnection: `peer.peerConnection.createDataChann
 
 ### Does it support audio/video?
 
-Yep! But not all browsers support the latest natively.
-To support chrome, your options object will need to extend `{sdpSemantics: 'unified-plan'}`
+Yes! It applies the `unified-plan` semantics by default.
 
 ## Usage
 
@@ -41,7 +41,7 @@ const streams = [await navigator.mediaDevices.getUserMedia({video: true, audio: 
 const audio = {streams}
 const video = {streams, sendEncodings: [{rid: 'full'},{rid: 'half', scaleResolutionDownBy: 2.0}]}
 
-const localPeer = new FastRTCPeer({isOfferer: true, sdpSemantics: 'unified-plan', audio, video})
+const localPeer = new FastRTCPeer({isOfferer: true, audio, video})
 
 // handle outgoing signals
 localPeer.on('signal', (payload) => {
@@ -55,11 +55,11 @@ socket.addEventListener('message', (event) => {
 })
 
 // handle events
-localPeer.on('dataOpen', (peer) => {
+localPeer.on('open', (peer) => {
   console.log('connected & ready to send and receive data!', peer)
   peer.send(JSON.stringify('Hello from', peer.id))
 })
-localPeer.on('dataClose', (peer) => {
+localPeer.on('close', (peer) => {
   console.log('disconnected from peer!', peer)
 })
 localPeer.on('data', (data, peer) => {
@@ -88,7 +88,8 @@ FastRTCPeer(options)
 ```
 Options: A superset of `RTCConfiguration`
 - `isOfferer`: true if this client will be sending an offer, falsy if the client will be receiving the offer.
-- `id`: An ID to assign to the peer, defaults to a v4 uuid
+- `id`: Connection ID. An ID to assign to the peer connection, defaults to a v4 uuid
+- `userId`: An ID to attach to the user, if known. Defaults to null. Probably won't know this until connection is established.
 - `wrtc`: pass in [node-webrtc](https://github.com/js-platform/node-webrtc) if using server side
 - `audio`: transceiver config containing the following options:
   - `streams`: an array of streams, eg `[await navigator.mediaDevices.getUserMedia({video: true, audio: true})]`
@@ -110,12 +111,12 @@ Methods
 
 ## Events
 
-- `peer.on('dataOpen', (peer) => {})`: fired when a peer connects
-- `peer.on('dataClose', (peer) => {})`: fired when a peer disconnects
+- `peer.on('open', (peer) => {})`: fired when a peer connection opens
+- `peer.on('close', (peer) => {})`: fired when a peer disconnects (does not fire for the peer that called `peer.close()`) 
 - `peer.on('data', (data, peer) => {})`: fired when a peer sends data
 - `peer.on('error', (error, peer) => {})`: fired when an error occurs in the signaling process
 - `peer.on('stream', (stream, peer) => {})`: fired when a stream has been created or modified
-- `peer.on('onTrack', (RTCTrackEvent, peer) => {})`: native `onTrack` event. You probably want to use `stream`
+- `peer.on('onTrack', (RTCTrackEvent, peer) => {})`: native `onTrack` event. Used internally. You probably want to use `stream`
 - `peer.on('signal', (signal, peer) => {})`: fired when a peer creates an offer, ICE candidate, or answer.
 Don't worry about what that means. Just forward it to the remote client & have them call `dispatch(signal)`.
 
