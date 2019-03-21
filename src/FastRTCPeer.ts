@@ -94,7 +94,7 @@ export interface StreamDictInput {
 }
 
 interface RemoteStreams {
-  [name: string]: MediaStream
+  [streamName: string]: MediaStream
 }
 
 interface StreamConfigEntry {
@@ -107,15 +107,16 @@ interface ClosePayload {
   readonly type: 'close'
 }
 
-interface TransceiverSynPayload {
-  readonly type: 'transSyn'
-  readonly name: string
-  readonly isOfferer: boolean
+interface MidNamePayload {
+  readonly type: 'midOffer'
+  readonly transceiverName: string
+  readonly mid: string
 }
 
-interface TransceiverAckPayload {
-  readonly type: 'transAck'
-  readonly name: string
+interface RequestTransceiverPayload {
+  readonly type: 'transceiverRequest'
+  readonly transceiverName: string
+  readonly kind: TrackKind
 }
 
 interface StreamPayload {
@@ -124,17 +125,7 @@ interface StreamPayload {
   readonly transceiverNames: string[]
 }
 
-interface TransceiverQueuePayload {
-  readonly type: 'transQueue'
-  readonly transceiverName: string
-}
-
-type InternalPayload =
-  | ClosePayload
-  | TransceiverSynPayload
-  | TransceiverAckPayload
-  | StreamPayload
-  | TransceiverQueuePayload
+type InternalPayload = ClosePayload | MidNamePayload | RequestTransceiverPayload | StreamPayload
 
 const replyWithTrack = async (
   transceiver: RTCRtpTransceiver,
@@ -188,12 +179,15 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   private readonly dataChannelQueue: InternalPayload[] = []
   private readonly isOfferer: boolean
   private readonly wrtc: WRTC | Window
-  private readonly pendingTransceivers = new Set<string>()
-  private readonly remoteStreams: RemoteStreams = {}
+  readonly remoteStreams: RemoteStreams = {}
   private readonly streamConfig: StreamConfigEntry[] = []
-  private readonly transceiverNameQueue: string[] = []
-  private readonly transceiverQueue: RTCRtpTransceiver[] = []
+  private readonly midsWithoutNames = new Set<string>()
+  private readonly pendingTransceivers: Array<{
+    transceiver: RTCRtpTransceiver
+    transceiverName: string
+  }> = []
   private negotiationCount = 0
+  private midLookup: {[transceiverName: string]: string} = {}
   // if dataChannel exists, then the connection is ready
   private dataChannel: RTCDataChannel | null = null
   readonly id: string
@@ -212,7 +206,8 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
       ...rtcConfig
     })
     this.setupPeer()
-    this.setupStreams(FastRTCPeer.fromStreamShorthand(streams), true)
+    this.addStreams(FastRTCPeer.fromStreamShorthand(streams))
+    window.p = this
   }
 
   private setupPeer () {
@@ -250,12 +245,22 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     await this.peerConnection.setLocalDescription(offer).catch((e: Error) => {
       this.emit('error', e, this)
     })
+    // now that a mid exists, move it from pending to the lookup
+    this.pendingTransceivers.slice().forEach(({ transceiver: { mid }, transceiverName }, idx) => {
+      if (!mid) return
+      this.midLookup[transceiverName] = mid
+      this.sendInternal({ type: 'midOffer', mid, transceiverName })
+      this.pendingTransceivers.splice(idx, 1)
+    })
+
     // firefox doesn't support toJSON
     const { sdp, type } = offer
+
     this.emit('signal', { sdp, type } as OfferPayload, this)
   }
 
   private addTrackToStream = (transceiverName: string, track: MediaStreamTrack) => {
+    // the names of the streams that include the transceiver's track
     const streamNames = new Set(
       this.streamConfig
         .filter((config) => config.transceiverName === transceiverName)
@@ -271,34 +276,22 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
       const streamCount = this.streamConfig.filter((config) => config.streamName === streamName)
         .length
       if (streamCount === stream.getTracks().length) {
+        // emit stream event when stream is complete
         this.emit('stream', stream, streamName, this)
       }
     })
   }
 
-  private handleTransceiverName = async (transceiver: RTCRtpTransceiver) => {
-    const name = this.transceiverNameQueue.shift()
-    if (name) {
-      transceiver.name = name
-      const { trackConfigOrKind } = this.streamConfig.find(
-        (config) => config.transceiverName === name
-      )!
-      // if we've been waiting to reply, add our track now
-      await replyWithTrack(transceiver, trackConfigOrKind)
-      this.addTrackToStream(transceiver.name, transceiver.receiver.track)
-    } else {
-      this.transceiverQueue.push(transceiver)
-    }
-  }
-
   private onTrack = async (e: RTCTrackEvent) => {
     const { track, transceiver } = e
-    if (transceiver.name) {
-      this.addTrackToStream(transceiver.name, track)
+    const transceiverName = Object.keys(this.midLookup).find(
+      (name) => this.midLookup[name] === transceiver.mid
+    )
+    if (transceiverName) {
+      this.addTrackToStream(transceiverName, track)
     } else {
-      // we got the transceiver before a message was pushed to the queue (usually this happens on init)
-      // we need to wait until that message comes in via transceiverNameQueue
-      this.handleTransceiverName(transceiver).catch()
+      if (!transceiver.mid) throw new Error('No mid in onTrack')
+      this.midsWithoutNames.add(transceiver.mid)
     }
   }
 
@@ -318,7 +311,6 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   private handleOffer = async (initSdp: RTCSessionDescriptionInit) => {
-    // typescript defs for RTCSessionDescription should return RTCSessionDescription, not the init
     const remoteSdp = new this.wrtc.RTCSessionDescription(initSdp)
     await this.peerConnection.setRemoteDescription(remoteSdp).catch((e: Error) => {
       this.emit('error', e, this)
@@ -339,36 +331,29 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
       case 'close':
         this.close()
         break
-      case 'transQueue':
-        this.transceiverNameQueue.push(payload.transceiverName)
-        this.handleTransceiverName(this.transceiverQueue.shift()!).catch()
+      case 'midOffer':
+        this.midLookup[payload.transceiverName] = payload.mid
+        if (this.midsWithoutNames.has(payload.mid)) {
+          this.midsWithoutNames.delete(payload.mid)
+          const transceiver = this.peerConnection
+            .getTransceivers()
+            .find(({ mid }) => mid === payload.mid)
+          if (!transceiver) throw new Error(`No transceiver exists with mid: ${payload.mid}`)
+          this.addTrackToStream(payload.transceiverName, transceiver.receiver.track)
+          const { trackConfigOrKind } = this.streamConfig.find(
+            ({ transceiverName }) => transceiverName === payload.transceiverName
+          )!
+          replyWithTrack(transceiver, trackConfigOrKind).catch()
+        }
         break
-      case 'transSyn':
-        const existingTransceiver = this.peerConnection
-          .getTransceivers()
-          .find((transceiver) => transceiver.name === payload.name)
-        // if the transceiver already exists, ignore the syn
-        if (existingTransceiver) break
-        // if both have sent out a syn, ignore theirs if we're the offerer (tiebreaker)
-        if (this.pendingTransceivers.has(payload.name) && !payload.isOfferer) break
-        // give the next track that comes in the proper name & don't send out a syn for this transceiver
-        this.transceiverNameQueue.push(payload.name)
-        this.sendInternal({ type: 'transAck', name: payload.name })
-        this.pendingTransceivers.delete(payload.name)
-        break
-      case 'transAck':
-        this.pendingTransceivers.delete(payload.name)
-        const entry = this.streamConfig.find((config) => config.transceiverName === payload.name)
-        if (!entry || !entry.trackConfigOrKind) throw new Error(`Invalid config for ack ${entry}`)
-        const { trackConfigOrKind } = entry
-        const trackOrKind =
-          typeof trackConfigOrKind === 'string' ? trackConfigOrKind : trackConfigOrKind.track
-        // mark any pending negotiations as stale since we're about to create a new transceiver
-        this.negotiationCount++
-        const transceiver = this.peerConnection.addTransceiver(trackOrKind)
-        transceiver.name = payload.name
-        if (typeof trackConfigOrKind !== 'string' && trackConfigOrKind.setParameters) {
-          trackConfigOrKind.setParameters(transceiver.sender).catch()
+      case 'transceiverRequest':
+        if (
+          !this.midLookup[payload.transceiverName] &&
+          !this.pendingTransceivers.some(
+            ({ transceiverName }) => transceiverName === payload.transceiverName
+          )
+        ) {
+          this.setupTransceiver(payload.transceiverName, payload.kind)
         }
         break
       case 'stream':
@@ -424,69 +409,84 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     }
   }
 
-  private async setTrack (
-    transceiverName: string,
-    trackConfigOrKind: TrackConfigOrKind,
-    isInit: boolean
-  ) {
-    const existingTransceiver = this.peerConnection
-      .getTransceivers()
-      .find((transceiver) => transceiver.name === transceiverName)
+  private setupTransceiver (transceiverName: string, defaultKind: TrackKind = 'video') {
+    const { trackConfigOrKind } = this.streamConfig.find(
+      (config) => config.transceiverName === transceiverName
+    )!
+    const trackOrKind =
+      typeof trackConfigOrKind === 'string'
+        ? trackConfigOrKind
+        : trackConfigOrKind
+          ? trackConfigOrKind.track
+          : defaultKind
+    this.negotiationCount++
+    const transceiver = this.peerConnection.addTransceiver(trackOrKind)
+    this.pendingTransceivers.push({ transceiver, transceiverName })
+  }
+
+  private getTransceiver (transceiverName: string) {
+    const mid = this.midLookup[transceiverName]
+    return this.peerConnection.getTransceivers().find((transceiver) => transceiver.mid === mid)
+  }
+
+  private setTrack (transceiverName: string, trackConfigOrKind: TrackConfigOrKind) {
+    const existingTransceiver = this.getTransceiver(transceiverName)
     if (existingTransceiver) {
-      await replyWithTrack(existingTransceiver, trackConfigOrKind)
-    } else if (!this.transceiverNameQueue.includes(transceiverName)) {
-      // if this.transceiverNameQueue includes the name, that means we already approved the peer's syn to create the transceiver
-      // when the peer's initial track arrives, we'll reply with the trackConfigOrKind stored in this.streamConfig
-      // setTrack could be called multiple times & we'll send a new syn each time (in case of network issues, UDP fun stuff, etc.)
-      if (isInit && this.isOfferer) {
-        const trackOrKind =
-          typeof trackConfigOrKind === 'string' ? trackConfigOrKind : trackConfigOrKind.track
-        this.negotiationCount++
-        const transceiver = this.peerConnection.addTransceiver(trackOrKind)
-        transceiver.name = transceiverName
-        this.sendInternal({ type: 'transQueue', transceiverName })
+      replyWithTrack(existingTransceiver, trackConfigOrKind).catch()
+    } else {
+      if (this.isOfferer) {
+        this.setupTransceiver(transceiverName)
       } else {
-        this.sendInternal({ type: 'transSyn', name: transceiverName, isOfferer: this.isOfferer })
-        this.pendingTransceivers.add(transceiverName)
+        // i don't know if the offerer is going to create the transceiver i want them to
+        // let me ask then to create it
+        const kind =
+          typeof trackConfigOrKind === 'string'
+            ? trackConfigOrKind
+            : (trackConfigOrKind.track.kind as TrackKind)
+        this.sendInternal({ type: 'transceiverRequest', transceiverName, kind })
       }
     }
   }
 
-  private setupStreams = (streams: StreamDict, isInit = false) => {
+  private upsertStreamConfig (
+    streamName: string,
+    transceiverName: string,
+    trackConfigOrKind: TrackConfigOrKind | null
+  ) {
+    const existingConfig = this.streamConfig.find(
+      (config) => config.streamName === streamName && config.transceiverName === transceiverName
+    )
+    if (!existingConfig) {
+      this.streamConfig.push({ streamName, transceiverName, trackConfigOrKind })
+    } else {
+      existingConfig.trackConfigOrKind = trackConfigOrKind
+    }
+  }
+
+  addStreams = (streams: StreamDict) => {
+    // if called after destruction, ignore
+    if (!this.peerConnection) return
     Object.keys(streams).forEach((streamName) => {
       const trackDict = streams[streamName]
       const transceiverNames = Object.keys(trackDict)
       this.sendInternal({ type: 'stream', streamName, transceiverNames })
       transceiverNames.forEach((transceiverName) => {
         const trackConfigOrKind = trackDict[transceiverName]
-        const existingConfig = this.streamConfig.find(
-          (config) => config.streamName === streamName && config.transceiverName === transceiverName
-        )
-        if (!existingConfig) {
-          this.streamConfig.push({ streamName, transceiverName, trackConfigOrKind })
-        } else {
-          existingConfig.trackConfigOrKind = trackConfigOrKind
-        }
+        this.upsertStreamConfig(streamName, transceiverName, trackConfigOrKind)
         if (trackConfigOrKind) {
-          this.setTrack(transceiverName, trackConfigOrKind, isInit).catch()
+          this.setTrack(transceiverName, trackConfigOrKind)
         }
       })
     })
   }
 
-  addStreams = (streams: StreamDict) => {
-    // if called after destruction, ignore
-    if (!this.peerConnection) return
-    this.setupStreams(streams)
-  }
-
-  async muteTrack (name: string) {
-    const transceiver = this.peerConnection
-      .getTransceivers()
-      .find((transceiver) => transceiver.name === name)
-    if (!transceiver) throw new Error(`Invalid track name: ${name}`)
+  muteTrack (transceiverName: string) {
+    const transceiver = this.getTransceiver(transceiverName)
+    if (!transceiver) {
+      throw new Error(`Invalid track name: ${name}`)
+    }
     const { track } = transceiver.sender
-    await transceiver.sender.replaceTrack(null)
+    transceiver.sender.replaceTrack(null).catch()
     transceiver.direction = 'recvonly'
     if (track) {
       track.enabled = false
@@ -532,8 +532,3 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
 }
 
 export default FastRTCPeer
-
-// refresh top
-// add video to top
-// refresh bottom
-// mute video from top
