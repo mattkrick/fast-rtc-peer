@@ -207,7 +207,6 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     })
     this.setupPeer()
     this.addStreams(FastRTCPeer.fromStreamShorthand(streams))
-    window.p = this
   }
 
   private setupPeer () {
