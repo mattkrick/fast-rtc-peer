@@ -424,6 +424,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   private getTransceiver (transceiverName: string) {
+    if (!this.peerConnection) return
     const mid = this.midLookup[transceiverName]
     return this.peerConnection.getTransceivers().find((transceiver) => transceiver.mid === mid)
   }
@@ -495,6 +496,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   close () {
+    if (!this.peerConnection) return
     // This prevents stray event handlers from being triggered while the connection is in the process of closing, potentially causing errors.
     this.peerConnection.ontrack = null
     this.peerConnection.onicecandidate = null
