@@ -191,7 +191,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   // if dataChannel exists, then the connection is ready
   private dataChannel: RTCDataChannel | null = null
   readonly id: string
-  readonly peerConnection!: RTCPeerConnection
+  readonly peerConnection: RTCPeerConnection
   userId: string | null
 
   constructor (userConfig: PeerConfig = {}) {
@@ -201,7 +201,9 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     this.isOfferer = isOfferer || false
     this.userId = userId || null
     this.wrtc = wrtc || window
-    this.peerConnection = new this.wrtc.RTCPeerConnection({
+    const { RTCPeerConnection } = this.wrtc
+    if (!RTCPeerConnection) throw new Error('Client does not support WebRTC')
+    this.peerConnection = new RTCPeerConnection({
       ...FastRTCPeer.defaultConfig,
       ...rtcConfig
     })
@@ -210,6 +212,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   private setupPeer () {
+    if (!this.peerConnection) return
     this.peerConnection.onicecandidate = this.onIceCandidate
     this.peerConnection.oniceconnectionstatechange = this.onIceConnectionStateChange
     this.peerConnection.onnegotiationneeded = this.onNegotiationNeeded
@@ -372,7 +375,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   private sendInternal (payload: InternalPayload) {
-    if (!this.dataChannel) {
+    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       this.dataChannelQueue.push(payload)
     } else {
       this.dataChannel.send(`@fast/${JSON.stringify(payload)}`)
@@ -515,7 +518,7 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   send = (data: DataPayload) => {
-    this.dataChannel && this.dataChannel.send(data)
+    this.dataChannel && this.dataChannel.readyState === 'open' && this.dataChannel.send(data)
   }
 
   dispatch (payload: PayloadFromServer) {
