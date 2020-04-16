@@ -378,7 +378,11 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
     if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
       this.dataChannelQueue.push(payload)
     } else {
-      this.dataChannel.send(`@fast/${JSON.stringify(payload)}`)
+      try {
+        this.dataChannel.send(`@fast/${JSON.stringify(payload)}`)
+      } catch (e) {
+        this.dataChannelQueue.push(payload)
+      }
     }
   }
 
@@ -419,8 +423,8 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
       typeof trackConfigOrKind === 'string'
         ? trackConfigOrKind
         : trackConfigOrKind
-          ? trackConfigOrKind.track
-          : defaultKind
+        ? trackConfigOrKind.track
+        : defaultKind
     this.negotiationCount++
     const transceiver = this.peerConnection.addTransceiver(trackOrKind)
     this.pendingTransceivers.push({ transceiver, transceiverName })
@@ -518,7 +522,12 @@ class FastRTCPeer extends (EventEmitter as FastRTCPeerEmitter) {
   }
 
   send = (data: DataPayload) => {
-    this.dataChannel && this.dataChannel.readyState === 'open' && this.dataChannel.send(data)
+    // even if the datachannel is open, it may still fail >:-(
+    try {
+      this.dataChannel?.send(data)
+    } catch (e) {
+      this.emit('error', e, this)
+    }
   }
 
   dispatch (payload: PayloadFromServer) {
